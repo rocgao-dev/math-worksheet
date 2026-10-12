@@ -10,6 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from src import generator as gen  # noqa: E402
 from src.config import (  # noqa: E402
     SheetConfig,
     date_range_tag,
@@ -323,6 +324,83 @@ class TestConfigValidation(unittest.TestCase):
 
     def test_strict_default_on(self):
         self.assertTrue(SheetConfig().strict_digits)
+
+
+class TestRelaxFallback(unittest.TestCase):
+    """严格数字规则组合不足时，自动逐级放宽兜底，保证题量出满。"""
+
+    def setUp(self):
+        self._orig_pool = gen.STRICT_DIGIT_POOL
+
+    def tearDown(self):
+        gen.STRICT_DIGIT_POOL = self._orig_pool
+
+    def test_levels_relax_progressively(self):
+        rng = random.Random(2026)
+        # level 0：严格 —— 不含 0/1、三位互不相同、无相邻连号
+        for _ in range(50):
+            s = str(gen._rand_number_level(3, rng, 0))
+            self.assertEqual(len(s), 3)
+            self.assertTrue(set(s) <= set("23456789"))
+            self.assertEqual(len(set(s)), 3)
+            self.assertFalse(
+                any(abs(int(s[i]) - int(s[i + 1])) == 1 for i in range(len(s) - 1))
+            )
+        # level 1：数字池不变，但允许相邻连号
+        saw_adjacent = False
+        for _ in range(400):
+            s = str(gen._rand_number_level(3, rng, 1))
+            self.assertTrue(set(s) <= set("23456789"))
+            self.assertEqual(len(set(s)), 3)
+            if any(abs(int(s[i]) - int(s[i + 1])) == 1 for i in range(len(s) - 1)):
+                saw_adjacent = True
+                break
+        self.assertTrue(saw_adjacent, "level 1 应允许相邻连号")
+        # level 2：允许出现数字 1（仍不含 0）
+        saw_one = False
+        for _ in range(400):
+            s = str(gen._rand_number_level(3, rng, 2))
+            self.assertNotIn("0", s)
+            self.assertEqual(len(set(s)), 3)
+            if "1" in s:
+                saw_one = True
+                break
+        self.assertTrue(saw_one, "level 2 应允许出现数字 1")
+        # level 3：允许出现数字 0，但首位非 0
+        saw_zero = False
+        for _ in range(400):
+            n = gen._rand_number_level(3, rng, 3)
+            s = str(n)
+            self.assertTrue(100 <= n <= 999)
+            self.assertEqual(len(set(s)), 3)
+            if "0" in s:
+                saw_zero = True
+                break
+        self.assertTrue(saw_zero, "level 3 应允许出现数字 0")
+
+    def test_fallback_relaxes_when_strict_pool_exhausted(self):
+        # 把严格池缩到只剩两位数字：严格档位几乎无解，必须自动放宽
+        gen.STRICT_DIGIT_POOL = "23"
+        cfg = SheetConfig(digit_pairs=((2, 2),), problems_per_page=6, pages=1, seed=2026)
+        cfg.normalize()
+        warnings: list[str] = []
+        got = build_page_problems(cfg, random.Random(7), 0, set(), warnings)
+        self.assertEqual(len(got), 6, "放宽后仍应出满 6 题")
+        self.assertTrue(warnings, "放宽时应产生提示")
+        for a, b in got:
+            for n in (a, b):
+                s = str(n)
+                self.assertEqual(len(s), 2)
+                self.assertTrue(set(s) <= set("123456789"), f"{s} 超出放宽档位允许范围")
+                self.assertEqual(len(set(s)), 2)
+                self.assertNotIn("0", s)
+
+    def test_fallback_allows_duplicates_as_last_resort(self):
+        # 一位数最多 9 个取值、无序对 45 种 < 80，必然触发“允许重复题目”兜底
+        cfg = SheetConfig(digit_pairs=((1, 1),), problems_per_page=80, pages=1, seed=1)
+        pages = generate(cfg)
+        self.assertEqual(len(pages[0]), 80, "兜底后必须出满题量")
+        self.assertTrue(cfg.warnings, "重复兜底时应产生提示")
 
 
 class TestQuotes(unittest.TestCase):

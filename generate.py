@@ -141,6 +141,10 @@ def main(argv: list[str] | None = None) -> int:
     print(f"     列数：{cfg.columns}    去重：{dedup_cn}"
           f"    严格数字规则：{'开' if cfg.strict_digits else '关'}")
     print(f"     页脚励志短语：{quote_cn}")
+    if cfg.warnings:
+        print("     提示（严格规则自动放宽）：")
+        for item in cfg.warnings:
+            print(f"       - {item}")
     print(f"     文件：{path}")
     return 0
 

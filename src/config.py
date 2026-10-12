@@ -136,6 +136,9 @@ class SheetConfig:
     seed: int | None = None          # 随机种子，None 表示每次不同
     out_path: str = ""               # 输出 PDF 路径
 
+    # 运行时提示（如严格规则组合不足时自动放宽的记录）；不参与参数校验，仅供调用方展示
+    warnings: list[str] = field(default_factory=list, compare=False)
+
     # 题面字号（pt），行高与作答空间随之伸缩
     font_size: int = 14
     header_font_size: int = 12

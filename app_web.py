@@ -181,6 +181,7 @@ def build_html() -> str:
       </div>
       <div style="margin-top:10px">
         <label class="check"><input type="checkbox" name="strict" checked>严格数字规则（不含 0 和 1 · 各位数字不重复 · 相邻不连号）</label>
+        <div class="hint">勾选后若某位数组合不足，会按「允许相邻连号 → 允许出现 1 → 允许出现 0 → 关闭严格规则」逐级自动放宽，保证题量出满，并在生成后提示具体放宽到哪一级。</div>
       </div>
       <div class="field" style="margin-top:10px;max-width:220px">
         <label>随机种子（选填，填数字可复现同一批题目）</label>
@@ -204,10 +205,12 @@ document.querySelectorAll('input[name=date_mode]').forEach(function (el) {{
 syncMode();
 
 document.getElementById('f').addEventListener('submit', function (e) {{
+  e.preventDefault();
   var msg = document.getElementById('msg');
+  var form = document.getElementById('f');
   var digits = document.querySelectorAll('input[name=digits]:checked');
   if (digits.length === 0) {{
-    e.preventDefault();
+    msg.style.color = '#b91c1c';
     msg.textContent = '请至少勾选一种乘数位数。';
     return;
   }}
@@ -216,13 +219,45 @@ document.getElementById('f').addEventListener('submit', function (e) {{
     var s = document.querySelector('input[name=date_start]').value;
     var t = document.querySelector('input[name=date_end]').value;
     if (!s || !t) {{
-      e.preventDefault();
+      msg.style.color = '#b91c1c';
       msg.textContent = '日期区间需要填写起始日期和结束日期。';
       return;
     }}
   }}
-  msg.textContent = '正在生成，请稍候…';
   msg.style.color = '#2563eb';
+  msg.textContent = '正在生成，请稍候…';
+  fetch('/generate', {{ method: 'POST', body: new URLSearchParams(new FormData(form)) }})
+    .then(function (r) {{
+      if (!r.ok) {{
+        return r.text().then(function (t) {{
+          throw new Error(t.replace(/<[^>]*>/g, ' ').trim());
+        }});
+      }}
+      return r.blob().then(function (b) {{
+        return {{ blob: b, warn: r.headers.get('X-Generate-Warnings'), name: r.headers.get('X-Filename') }};
+      }});
+    }})
+    .then(function (res) {{
+      var a = document.createElement('a');
+      var url = URL.createObjectURL(res.blob);
+      a.href = url;
+      a.download = res.name ? decodeURIComponent(res.name) : 'sheet.pdf';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(function () {{ URL.revokeObjectURL(url); }}, 5000);
+      if (res.warn) {{
+        msg.style.color = '#b45309';
+        msg.textContent = '已生成并开始下载。注意：' + decodeURIComponent(res.warn);
+      }} else {{
+        msg.style.color = '#15803d';
+        msg.textContent = '已生成，开始下载。';
+      }}
+    }})
+    .catch(function (err) {{
+      msg.style.color = '#b91c1c';
+      msg.textContent = '生成失败：' + err.message;
+    }});
 }});
 </script>
 </body>
@@ -319,14 +354,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
             else:
                 data = build_pdf_bytes(cfg)
                 content_type = "application/pdf"
+            warnings = list(cfg.warnings)      # 需在 suggested_filename 之前取
             filename = suggested_filename(cfg)
             quoted = urllib.parse.quote(filename)
-            self._send(
-                200,
-                data,
-                content_type,
-                {"Content-Disposition": f"attachment; filename=\"sheet\"; filename*=UTF-8''{quoted}"},
-            )
+            extra = {
+                "Content-Disposition": f"attachment; filename=\"sheet\"; filename*=UTF-8''{quoted}",
+                "X-Filename": quoted,
+            }
+            if warnings:
+                # HTTP 头需为 ASCII，故 URL 编码后回传，前端再解码展示
+                extra["X-Generate-Warnings"] = urllib.parse.quote("；".join(warnings))
+            self._send(200, data, content_type, extra)
         except Exception as exc:  # 参数错误等回显给用户
             html = (
                 "<!DOCTYPE html><html lang='zh-CN'><meta charset='utf-8'>"

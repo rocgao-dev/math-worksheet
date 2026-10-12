@@ -1,3 +1,4 @@
+# AI生成
 """题目生成器：按位数组合生成乘法算式，支持同页去重与随机种子复现。"""
 from __future__ import annotations
 
@@ -21,6 +22,23 @@ def digit_bounds(digits: int) -> tuple[int, int]:
 #   3) 相邻两位不能连续（相差 1，如 23 / 34 / 87）。
 STRICT_DIGIT_POOL = "23456789"   # 可用数字池（已排除 0 与 1）
 STRICT_MAX_TRIES = 300           # 拒绝采样次数上限
+
+
+# ---------------------------------------------------------------- 自动放宽档位
+# 严格规则下可用组合不足时，按下列顺序逐级放宽，保证一定能出满题目：
+#   0 严格：数字池 {2..9}，各位不重复，相邻不连号            （默认）
+#   1 放宽：允许相邻位数字连续（如 23 / 34）
+#   2 放宽：允许出现数字 1
+#   3 放宽：允许出现数字 0
+#   4 放宽：完全关闭严格规则（允许重复数字）
+RELAX_LEVELS = (0, 1, 2, 3, 4)
+RELAX_NOTES = {
+    1: "严格规则下可用组合不足，已自动放宽：允许相邻位数字连续（如 23、34）",
+    2: "严格规则下可用组合不足，已自动放宽：允许出现数字 1",
+    3: "严格规则下可用组合不足，已自动放宽：允许出现数字 0",
+    4: "严格规则下可用组合不足，已自动关闭严格数字规则（允许重复数字）",
+}
+DUPLICATE_NOTE = "可用组合仍不足，已自动放宽：本页允许出现重复题目"
 
 
 def _has_adjacent_consecutive(seq: Sequence[int]) -> bool:
@@ -56,6 +74,35 @@ def _rand_number(digits: int, rng: random.Random, strict: bool = True) -> int:
     return rng.randint(lo, hi)
 
 
+def _rand_number_level(digits: int, rng: random.Random, level: int) -> int:
+    """按“自动放宽档位”生成一个 digits 位数：level 越大限制越少。
+
+    档位定义见 RELAX_LEVELS / RELAX_NOTES；档位无法满足给定位数时抛 ValueError，
+    由调用方切换到下一档。
+    """
+    if level <= 0:
+        return strict_number(digits, rng)
+    if level == 1:
+        pool = [int(c) for c in STRICT_DIGIT_POOL]
+    elif level == 2:
+        pool = list(range(1, 10))
+    elif level == 3:
+        pool = list(range(10))
+    else:
+        lo, hi = digit_bounds(digits)
+        return rng.randint(lo, hi)
+
+    if digits < 1 or digits > len(pool):
+        raise ValueError(f"档位 {level} 无法生成 {digits} 位数")
+    if level == 3:  # 允许 0，但首位不能为 0
+        first = rng.choice([d for d in pool if d != 0])
+        rest = rng.sample([d for d in pool if d != first], digits - 1)
+        seq = [first] + rest
+    else:
+        seq = rng.sample(pool, digits)
+    return int("".join(str(d) for d in seq))
+
+
 def make_problem(
     a_digits: int,
     b_digits: int,
@@ -82,49 +129,88 @@ def _rotate(pairs: Sequence[tuple[int, int]], index: int) -> tuple[int, int]:
     return pairs[index % len(pairs)]
 
 
+def _fill_page(
+    cfg: SheetConfig,
+    rng: random.Random,
+    page_index: int,
+    global_seen: set[tuple[int, int]],
+    count: int,
+    level: int,
+    max_attempts: int,
+    honor_dedup: bool = True,
+) -> list[tuple[int, int]] | None:
+    """在指定放宽档位下尝试填满一页；成功返回题目列表，失败返回 None。
+
+    为避免污染调用方的去重集合，只有在本档位成功填满时才把本页题目写入 global_seen。
+    """
+    pairs = cfg.digit_pairs
+    use_dedup = honor_dedup and cfg.dedup
+    sheet_scope = use_dedup and cfg.dedup_scope == "sheet"
+    page_seen: set[tuple[int, int]] = set()
+    pending: set[tuple[int, int]] = set()
+    problems: list[tuple[int, int]] = []
+
+    attempts = 0
+    idx = 0
+    while len(problems) < count and attempts < max_attempts:
+        attempts += 1
+        a_digits, b_digits = _rotate(pairs, idx + page_index)
+        idx += 1
+        try:
+            a = _rand_number_level(a_digits, rng, level)
+            b = _rand_number_level(b_digits, rng, level)
+        except (ValueError, RuntimeError):
+            return None   # 该档位无法生成所需位数，交给下一档
+        if use_dedup:
+            key = _key(a, b)
+            if key in page_seen or (sheet_scope and (key in global_seen or key in pending)):
+                continue
+            page_seen.add(key)
+            pending.add(key)
+        problems.append((a, b))
+
+    if len(problems) < count:
+        return None
+    if use_dedup:
+        global_seen.update(page_seen)
+    return problems
+
+
 def build_page_problems(
     cfg: SheetConfig,
     rng: random.Random,
     page_index: int,
     global_seen: set[tuple[int, int]],
+    warnings: list[str] | None = None,
 ) -> list[tuple[int, int]]:
-    """生成一页题目。
+    """生成一页题目，并在严格规则组合不足时自动逐级放宽（保证题量）。
 
     去重范围由 cfg.dedup_scope 决定（前提是 cfg.dedup 为 True）：
       - "page"（默认）：只保证本页/本天内不重复，跨页与跨天允许重复；
       - "sheet"：整卷、整批（含多天）全程不重复，通过 global_seen 跨页共享。
+
+    放宽顺序见 RELAX_LEVELS；每一档都记入 warnings（去重后）供调用方提示用户。
+    所有档位都填不满时，最后兜底为“允许重复题目”，确保不因组合枯竭而失败。
     """
-    pairs = cfg.digit_pairs
     count = cfg.problems_per_page
-    page_seen: set[tuple[int, int]] = set()
-    problems: list[tuple[int, int]] = []
+    budget = count * 400 + 2000          # 防御性上限，避免极端参数下死循环
+    levels = RELAX_LEVELS if cfg.strict_digits else (4,)
 
-    max_attempts = count * 400 + 2000  # 防御性上限，避免极端参数下死循环
-    attempts = 0
-    idx = 0
+    for level in levels:
+        problems = _fill_page(cfg, rng, page_index, global_seen, count, level, budget)
+        if problems is not None:
+            if level > 0 and cfg.strict_digits and warnings is not None:
+                note = RELAX_NOTES[level]
+                if note not in warnings:
+                    warnings.append(note)
+            return problems
 
-    while len(problems) < count and attempts < max_attempts:
-        attempts += 1
-        a_digits, b_digits = _rotate(pairs, idx + page_index)
-        idx += 1
-        a, b = make_problem(a_digits, b_digits, rng, cfg.strict_digits)
-
-        if cfg.dedup:
-            key = _key(a, b)
-            if key in page_seen:
-                continue
-            # page 范围：只保证本页/本天内不重复，跨页与跨天允许重复
-            if cfg.dedup_scope == "sheet" and key in global_seen:
-                continue
-            page_seen.add(key)
-            global_seen.add(key)
-
-        problems.append((a, b))
-
-    if len(problems) < count:
-        raise RuntimeError(
-            f"可用题目组合不足，无法生成 {count} 道不重复题目，请减少每页题数或调整位数组合"
-        )
+    problems = _fill_page(cfg, rng, page_index, global_seen, count, 4, budget,
+                          honor_dedup=False)
+    if problems is None:   # 理论上不会发生，仅作最后防线
+        raise RuntimeError(f"无法生成 {count} 道题目，请减少每页题数")
+    if warnings is not None and DUPLICATE_NOTE not in warnings:
+        warnings.append(DUPLICATE_NOTE)
     return problems
 
 
@@ -139,13 +225,14 @@ def generate(cfg: SheetConfig, seed: int | None = None) -> list[list[tuple[int, 
         若显式传入则覆盖 cfg.seed。
     """
     cfg.normalize()
+    cfg.warnings.clear()
     real_seed = cfg.seed if seed is None else seed
     rng = random.Random(real_seed)
 
     global_seen: set[tuple[int, int]] = set()
     pages: list[list[tuple[int, int]]] = []
     for page_index in range(cfg.pages):
-        pages.append(build_page_problems(cfg, rng, page_index, global_seen))
+        pages.append(build_page_problems(cfg, rng, page_index, global_seen, cfg.warnings))
     return pages
 
 
@@ -153,9 +240,11 @@ def generate_days(cfg: SheetConfig) -> list[list[list[tuple[int, int]]]]:
     """按配置的日期区间生成整批题目。
 
     返回 ``[每天][每页][题目]`` 三层结构：外层是日期，中层是该天的页，内层是题目。
-    跨天仍共享同一个去重集合，确保整批不出现重复题目。
+    去重范围由 cfg.dedup_scope 决定（page=仅同一天内，sheet=整批不重复）；
+    严格规则组合不足时会自动逐级放宽，并把提示记入 cfg.warnings。
     """
     cfg.normalize()
+    cfg.warnings.clear()
     rng = random.Random(cfg.seed)
 
     global_seen: set[tuple[int, int]] = set()
@@ -164,7 +253,7 @@ def generate_days(cfg: SheetConfig) -> list[list[list[tuple[int, int]]]]:
     for _d in cfg.date_list():
         day_pages: list[list[tuple[int, int]]] = []
         for _ in range(cfg.pages):
-            day_pages.append(build_page_problems(cfg, rng, page_no, global_seen))
+            day_pages.append(build_page_problems(cfg, rng, page_no, global_seen, cfg.warnings))
             page_no += 1
         days.append(day_pages)
     return days
