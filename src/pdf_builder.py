@@ -22,10 +22,27 @@ from .config import (
 )
 from .generator import generate_days
 from .layout import draw_page
+from .quotes import pick_quotes
 
 
 def _digit_tag(cfg: SheetConfig) -> str:
     return "_".join(f"{a}x{b}" for a, b in cfg.digit_pairs)
+
+
+def _page_quotes(cfg: SheetConfig, count: int) -> list[str | None]:
+    """按页生成页脚励志短语文本。
+
+    - 关闭显示（show_quote=False）→ 全部为 None；
+    - 填了自定义短语（quote_text）→ 每页都用这一句；
+    - 否则 → 由内置词库随机取，多页尽量不重复。
+    """
+    if count <= 0:
+        return []
+    if not cfg.show_quote:
+        return [None] * count
+    if cfg.quote_text:
+        return [cfg.quote_text] * count
+    return list(pick_quotes(count, cfg.seed))
 
 
 def _resolve_target(cfg: SheetConfig, out_path: str | None, default_suffix: str) -> Path:
@@ -46,13 +63,14 @@ def _render_all(c: canvas.Canvas, cfg: SheetConfig) -> int:
     days = generate_days(cfg)
     dates = cfg.date_list()
     total = sum(len(sheets) for sheets in days)
+    quotes = _page_quotes(cfg, total)
 
     page_no = 0
     for sheets, d in zip(days, dates):
         label = cfg.date_label(d)
         for problems in sheets:
+            draw_page(c, cfg, problems, page_no + 1, total, label, quotes[page_no])
             page_no += 1
-            draw_page(c, cfg, problems, page_no, total, label)
             c.showPage()
     return total
 
@@ -82,7 +100,12 @@ def build_pdf_bytes(cfg: SheetConfig) -> bytes:
     return buf.getvalue()
 
 
-def _single_day_pdf_bytes(cfg: SheetConfig, sheets: list[list[tuple[int, int]]], label: str) -> bytes:
+def _single_day_pdf_bytes(
+    cfg: SheetConfig,
+    sheets: list[list[tuple[int, int]]],
+    label: str,
+    quotes: list[str | None] | None = None,
+) -> bytes:
     """渲染某一天的独立 PDF（当天共 len(sheets) 页）。"""
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=(PAGE_WIDTH, PAGE_HEIGHT))
@@ -90,7 +113,8 @@ def _single_day_pdf_bytes(cfg: SheetConfig, sheets: list[list[tuple[int, int]]],
     c.setAuthor("math-worksheet")
     total = len(sheets)
     for index, problems in enumerate(sheets, start=1):
-        draw_page(c, cfg, problems, index, total, label)
+        quote = quotes[index - 1] if quotes and index - 1 < len(quotes) else None
+        draw_page(c, cfg, problems, index, total, label, quote)
         c.showPage()
     c.save()
     return buf.getvalue()
@@ -103,12 +127,18 @@ def build_zip_bytes(cfg: SheetConfig) -> bytes:
     dates = cfg.date_list()
     tag = _digit_tag(cfg)
 
+    total = sum(len(sheets) for sheets in days)
+    all_quotes = _page_quotes(cfg, total)
+
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        cursor = 0
         for sheets, d in zip(days, dates):
             if not sheets:
                 continue
-            data = _single_day_pdf_bytes(cfg, sheets, cfg.date_label(d))
+            day_quotes = all_quotes[cursor:cursor + len(sheets)]
+            cursor += len(sheets)
+            data = _single_day_pdf_bytes(cfg, sheets, cfg.date_label(d), day_quotes)
             zf.writestr(f"{cfg.title}_{tag}_{d.isoformat()}.pdf", data)
     return buf.getvalue()
 

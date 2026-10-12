@@ -325,5 +325,85 @@ class TestConfigValidation(unittest.TestCase):
         self.assertTrue(SheetConfig().strict_digits)
 
 
+class TestQuotes(unittest.TestCase):
+    """页脚励志短语：词库完整性、取句、逐页文本解析。"""
+
+    def test_library_not_empty(self):
+        from reportlab.pdfbase import pdfmetrics
+
+        from src.config import FONT_NAME_REGULAR, MARGIN_LEFT, MARGIN_RIGHT, PAGE_WIDTH
+        from src.layout import register_fonts
+        from src.quotes import QUOTE_MIN_FONT_SIZE, QUOTES
+
+        # 与 layout.draw_footer 保持一致：短语右侧留给页码 130pt
+        footer_max_width = PAGE_WIDTH - MARGIN_LEFT - MARGIN_RIGHT - 130.0
+        register_fonts()
+
+        self.assertGreaterEqual(len(QUOTES), 30, "词库条数偏少")
+        for q in QUOTES:
+            self.assertIsInstance(q, str)
+            self.assertTrue(q.strip(), "词库中出现空短语")
+            # 不设死字数上限：只要页脚在最小字号下仍能放下即可
+            width = pdfmetrics.stringWidth(q, FONT_NAME_REGULAR, QUOTE_MIN_FONT_SIZE)
+            self.assertLessEqual(
+                width, footer_max_width, f"短语过长、页脚最小字号也放不下：{q}"
+            )
+        self.assertEqual(len(QUOTES), len(set(QUOTES)), "词库中存在重复短语")
+
+    def test_pick_quotes_count_and_membership(self):
+        from src.quotes import QUOTES, pick_quotes
+        picked = pick_quotes(6)
+        self.assertEqual(len(picked), 6)
+        for q in picked:
+            self.assertIn(q, QUOTES)
+
+    def test_pick_quotes_unique(self):
+        from src.quotes import pick_quotes
+        picked = pick_quotes(10)
+        self.assertEqual(len(picked), len(set(picked)), "同一批取句出现重复")
+
+    def test_pick_quotes_seed_reproducible(self):
+        from src.quotes import pick_quotes
+        self.assertEqual(pick_quotes(8, seed=2026), pick_quotes(8, seed=2026))
+
+    def test_pick_quotes_overflow_cycles(self):
+        from src.quotes import QUOTES, pick_quotes
+        n = len(QUOTES) + 5
+        picked = pick_quotes(n)
+        self.assertEqual(len(picked), n)
+        for q in picked:
+            self.assertIn(q, QUOTES)
+
+    def test_page_quotes_disabled(self):
+        from src.pdf_builder import _page_quotes
+        cfg = SheetConfig(show_quote=False)
+        self.assertEqual(_page_quotes(cfg, 3), [None, None, None])
+
+    def test_page_quotes_custom_text(self):
+        from src.pdf_builder import _page_quotes
+        cfg = SheetConfig(show_quote=True, quote_text="每天进步一点点")
+        self.assertEqual(_page_quotes(cfg, 2), ["每天进步一点点", "每天进步一点点"])
+
+    def test_page_quotes_library_default(self):
+        from src.pdf_builder import _page_quotes
+        from src.quotes import QUOTES
+        cfg = SheetConfig(seed=42)
+        got = _page_quotes(cfg, 4)
+        self.assertEqual(len(got), 4)
+        for q in got:
+            self.assertIn(q, QUOTES)
+
+    def test_page_quotes_zero(self):
+        from src.pdf_builder import _page_quotes
+        self.assertEqual(_page_quotes(SheetConfig(), 0), [])
+
+    def test_default_show_quote_on(self):
+        self.assertTrue(SheetConfig().show_quote)
+
+    def test_quote_text_normalized(self):
+        cfg = SheetConfig(quote_text="  加油  ").normalize()
+        self.assertEqual(cfg.quote_text, "加油")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -124,6 +124,9 @@ class SheetConfig:
     show_time: bool = True           # 页眉是否显示“用时____”
     show_score: bool = True          # 页眉是否显示“得分____”
 
+    show_quote: bool = True          # 页脚是否显示励志短语
+    quote_text: str = ""             # 自定义短语；为空时由内置词库逐页随机取
+
     dedup: bool = True               # 题目去重开关
     # 去重范围：page=只保证“同一页/同一天”内不重复（跨页、跨天可重复，默认）；
     #           sheet=整卷（含多天）全程不重复
@@ -158,6 +161,7 @@ class SheetConfig:
         self.pages = max(1, int(self.pages))
         self.columns = max(1, int(self.columns))
         self.font_size = max(8, int(self.font_size))
+        self.quote_text = (self.quote_text or "").strip()
 
         self.date_str = parse_iso_date(self.date_str, "起始日期").isoformat()
         if self.date_end:

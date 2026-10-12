@@ -21,6 +21,7 @@ from .config import (
     SheetConfig,
     find_font,
 )
+from .quotes import QUOTE_COLOR, QUOTE_FONT_SIZE, QUOTE_MIN_FONT_SIZE
 
 _REGISTERED = False
 
@@ -120,9 +121,36 @@ def draw_header(
     return y - 2
 
 
-def draw_footer(c: "canvas.Canvas", page_no: int, total_pages: int) -> None:  # noqa: F821
+def draw_footer(
+    c: "canvas.Canvas",  # noqa: F821
+    page_no: int,
+    total_pages: int,
+    quote: str | None = None,
+) -> None:
+    """页脚：页码固定在右下角；若给定励志短语，则居中显示（小字浅灰）。
+
+    短语与页码同行但互不重叠；短语过宽时自动缩小字号。
+    """
+    y = MARGIN_BOTTOM - 6
+    page_label = f"第 {page_no} / {total_pages} 页"
+
+    if quote:
+        size = QUOTE_FONT_SIZE
+        max_width = PAGE_WIDTH - MARGIN_LEFT - MARGIN_RIGHT - 130.0
+        while size > QUOTE_MIN_FONT_SIZE and pdfmetrics.stringWidth(
+            quote, FONT_NAME_REGULAR, size
+        ) > max_width:
+            size -= 0.5
+        c.setFont(FONT_NAME_REGULAR, size)
+        c.setFillColorRGB(*QUOTE_COLOR)
+        c.drawCentredString(PAGE_WIDTH / 2, y, quote)
+        c.setFillColorRGB(0, 0, 0)   # 恢复黑色，避免影响后续绘制
+
     c.setFont(FONT_NAME_REGULAR, 10)
-    c.drawCentredString(PAGE_WIDTH / 2, MARGIN_BOTTOM - 6, f"第 {page_no} / {total_pages} 页")
+    if quote:
+        c.drawRightString(PAGE_WIDTH - MARGIN_RIGHT, y, page_label)
+    else:
+        c.drawCentredString(PAGE_WIDTH / 2, y, page_label)
 
 
 def draw_problems(
@@ -166,10 +194,11 @@ def draw_page(
     page_no: int,
     total_pages: int,
     date_label: str | None = None,
+    quote: str | None = None,
 ) -> None:  # noqa: F821
     """绘制单页（调用方负责 showPage / save）。
 
-    ``date_label`` 用于页眉日期；批量生成时逐页传入当天日期。
+    ``date_label`` 用于页眉日期；``quote`` 为页脚励志短语（None 则不显示）。
     """
     register_fonts()
 
@@ -178,4 +207,4 @@ def draw_page(
     area_bottom = MARGIN_BOTTOM + 12
 
     draw_problems(c, cfg, problems, area_top, area_bottom)
-    draw_footer(c, page_no, total_pages)
+    draw_footer(c, page_no, total_pages, quote)

@@ -73,6 +73,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-score", dest="show_score", action="store_false", help="隐藏“得分”栏")
     p.set_defaults(show_time=True, show_score=True)
 
+    p.add_argument("--no-quote", dest="show_quote", action="store_false",
+                   help="页脚不显示励志短语（默认显示）")
+    p.add_argument("--quote", dest="quote_text", default="",
+                   help="页脚励志短语：填了则每页都用这一句（默认由内置词库逐页随机）")
+    p.set_defaults(show_quote=True)
+
     p.add_argument("--no-dedup", action="store_true", help="关闭题目去重")
     p.add_argument("--dedup-scope", dest="dedup_scope", default="page",
                    choices=("page", "sheet"),
@@ -105,6 +111,8 @@ def main(argv: list[str] | None = None) -> int:
         show_class=not args.no_class,
         show_time=args.show_time,
         show_score=args.show_score,
+        show_quote=args.show_quote,
+        quote_text=args.quote_text,
         dedup=dedup,
         dedup_scope=args.dedup_scope if dedup else "page",
         strict_digits=not args.no_strict,
@@ -120,12 +128,19 @@ def main(argv: list[str] | None = None) -> int:
     total = len(days) * cfg.pages * cfg.problems_per_page
     kind = "ZIP（每天一个 PDF）" if cfg.output_mode == "zip" else "PDF"
     dedup_cn = DEDUP_SCOPE_CN["none"] if not cfg.dedup else DEDUP_SCOPE_CN[cfg.dedup_scope]
+    if not cfg.show_quote:
+        quote_cn = "关"
+    elif cfg.quote_text:
+        quote_cn = f"自定义（{cfg.quote_text}）"
+    else:
+        quote_cn = "内置词库随机"
     print(f"[OK] 已生成 {kind}")
     print(f"     题型：{cfg.digits_label()} × {cfg.problems_per_page} 题/页 × {cfg.pages} 页/天")
     print(f"     日期：{cfg.start_date} → {cfg.end_date}（{len(days)} 天，共 {total} 题）"
           f"    星期显示：{'开' if cfg.show_weekday else '关'}")
     print(f"     列数：{cfg.columns}    去重：{dedup_cn}"
           f"    严格数字规则：{'开' if cfg.strict_digits else '关'}")
+    print(f"     页脚励志短语：{quote_cn}")
     print(f"     文件：{path}")
     return 0
 

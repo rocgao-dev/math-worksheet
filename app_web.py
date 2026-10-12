@@ -160,6 +160,16 @@ def build_html() -> str:
     </fieldset>
 
     <fieldset>
+      <legend>页脚励志短语</legend>
+      <label class="check"><input type="checkbox" name="quote" checked>页脚显示励志短语（写给 12 岁初一男生，居中浅灰小字，页码移至右下角）</label>
+      <div class="field" style="margin-top:8px">
+        <label>自定义短语（留空则每页从内置词库随机取一句，多页尽量不重复）</label>
+        <input type="text" name="quote_text" placeholder="例如：每天进步一点点，坚持就是胜利。">
+      </div>
+      <div class="hint">取消勾选则不显示短语，页码回到页面底部居中。</div>
+    </fieldset>
+
+    <fieldset>
       <legend>输出与生成选项</legend>
       <label class="radio"><input type="radio" name="output_mode" value="merge" checked>合并成一个 PDF</label>
       <label class="radio"><input type="radio" name="output_mode" value="zip">打包成 ZIP（每天一个 PDF）</label>
@@ -259,6 +269,8 @@ def parse_form(form: dict[str, list[str]]) -> SheetConfig:
         show_class="class" in form,
         show_time="time" in form,
         show_score="score" in form,
+        show_quote="quote" in form,
+        quote_text=one("quote_text").strip(),
         dedup=dedup_mode != "none",
         dedup_scope="sheet" if dedup_mode == "sheet" else "page",
         strict_digits="strict" in form,
